@@ -1,8 +1,8 @@
 ﻿using NadekoBot.Services.Database.Models;
 using Microsoft.EntityFrameworkCore;
-using System;
 using System.Linq;
 using System.Threading.Tasks;
+using System;
 
 namespace NadekoBot.Services.Database.Repositories.Impl
 {
@@ -32,6 +32,11 @@ namespace NadekoBot.Services.Database.Repositories.Impl
                     }
                 })
                 .ConfigureAwait(false);
+        }
+
+        public Warning[] GetForGuild(ulong id)
+        {
+            return _set.Where(x => x.GuildId == id).ToArray();
         }
     }
 }
