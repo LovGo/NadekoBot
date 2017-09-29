@@ -1,10 +1,8 @@
 ﻿using NadekoBot.Extensions;
 using NadekoBot.Modules.Music.Common.Exceptions;
-using NadekoBot.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using NadekoBot.Common;
 
@@ -77,6 +75,27 @@ namespace NadekoBot.Modules.Music.Common
                 if(MaxQueueSize != 0 && Songs.Count >= MaxQueueSize)
                     throw new QueueFullException();
                 Songs.AddLast(song);
+            }
+        }
+
+        public int AddNext(SongInfo song)
+        {
+            song.ThrowIfNull(nameof(song));
+            lock (locker)
+            {
+                if (MaxQueueSize != 0 && Songs.Count >= MaxQueueSize)
+                    throw new QueueFullException();
+                var curSong = Current.Song;
+                if (curSong == null)
+                {
+                    Songs.AddLast(song);
+                    return Songs.Count;
+                }
+
+                var songlist = Songs.ToList();
+                songlist.Insert(CurrentIndex + 1, song);
+                Songs = new LinkedList<SongInfo>(songlist);
+                return CurrentIndex + 1;
             }
         }
 

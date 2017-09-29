@@ -7,17 +7,15 @@ using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
 using NadekoBot.Extensions;
-using NadekoBot.Services;
 using NadekoBot.Services.Impl;
 
 namespace NadekoBot.Modules.Games.Common
 {
-    //todo 75 rewrite
     public class Poll
     {
         private readonly IUserMessage _originalMessage;
         private readonly IGuild _guild;
-        private string[] answers { get; }
+        private readonly string[] answers;
         private readonly ConcurrentDictionary<ulong, int> _participants = new ConcurrentDictionary<ulong, int>();
         private readonly string _question;
         private readonly DiscordSocketClient _client;

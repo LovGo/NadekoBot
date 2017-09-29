@@ -39,10 +39,11 @@ namespace NadekoBot.Services
         public string DefaultPrefix { get; private set; }
         private ConcurrentDictionary<ulong, string> _prefixes { get; } = new ConcurrentDictionary<ulong, string>();
 
-        private ImmutableArray<AsyncLazy<IDMChannel>> ownerChannels { get; set; } = new ImmutableArray<AsyncLazy<IDMChannel>>();
+        private ImmutableArray<AsyncLazy<IDMChannel>> OwnerChannels { get; set; } = new ImmutableArray<AsyncLazy<IDMChannel>>();
         
         public event Func<IUserMessage, CommandInfo, Task> CommandExecuted = delegate { return Task.CompletedTask; };
         public event Func<CommandInfo, ITextChannel, string, Task> CommandErrored = delegate { return Task.CompletedTask; };
+        public event Func<IUserMessage, Task> OnMessageNoTrigger = delegate { return Task.CompletedTask; };
 
         //userid/msg count
         public ConcurrentDictionary<ulong, uint> UserMessagesSent { get; } = new ConcurrentDictionary<ulong, uint>();
@@ -50,7 +51,7 @@ namespace NadekoBot.Services
         public ConcurrentHashSet<ulong> UsersOnShortCooldown { get; } = new ConcurrentHashSet<ulong>();
         private readonly Timer _clearUsersOnShortCooldown;
 
-        public CommandHandler(DiscordSocketClient client, DbService db, BotConfig bc, IEnumerable<GuildConfig> gcs, CommandService commandService, IBotCredentials credentials, NadekoBot bot)
+        public CommandHandler(DiscordSocketClient client, DbService db, IBotConfigProvider bc, IEnumerable<GuildConfig> gcs, CommandService commandService, IBotCredentials credentials, NadekoBot bot)
         {
             _client = client;
             _commandService = commandService;
@@ -65,7 +66,7 @@ namespace NadekoBot.Services
                 UsersOnShortCooldown.Clear();
             }, null, GlobalCommandsCooldown, GlobalCommandsCooldown);
 
-            DefaultPrefix = bc.DefaultPrefix;
+            DefaultPrefix = bc.BotConfig.DefaultPrefix;
             _prefixes = gcs
                 .Where(x => x.Prefix != null)
                 .ToDictionary(x => x.GuildId, x => x.Prefix)
@@ -261,12 +262,13 @@ namespace NadekoBot.Services
                 }
             }
             var prefix = GetPrefix(guild?.Id);
+            var isPrefixCommand = messageContent.StartsWith(".prefix");
             // execute the command and measure the time it took
-            if (messageContent.StartsWith(prefix))
+            if (messageContent.StartsWith(prefix) || isPrefixCommand)
             {
-                var result = await ExecuteCommandAsync(new CommandContext(_client, usrMsg), messageContent, prefix.Length, _services, MultiMatchHandling.Best);
+                var result = await ExecuteCommandAsync(new CommandContext(_client, usrMsg), messageContent, isPrefixCommand ? 1 : prefix.Length, _services, MultiMatchHandling.Best);
                 execTime = Environment.TickCount - execTime;
-                
+
                 if (result.Success)
                 {
                     await LogSuccessfulExecution(usrMsg, channel as ITextChannel, exec2, exec3, execTime).ConfigureAwait(false);
@@ -275,11 +277,14 @@ namespace NadekoBot.Services
                 }
                 else if (result.Error != null)
                 {
-                    LogErroredExecution(result.Error, usrMsg,  channel as ITextChannel, exec2, exec3, execTime);
+                    LogErroredExecution(result.Error, usrMsg, channel as ITextChannel, exec2, exec3, execTime);
                     if (guild != null)
                         await CommandErrored(result.Info, channel as ITextChannel, result.Error);
                 }
-
+            }
+            else
+            {
+                await OnMessageNoTrigger(usrMsg).ConfigureAwait(false);
             }
 
             foreach (var svc in _services)

@@ -8,7 +8,6 @@ using System;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
-using NadekoBot.Modules.Permissions;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using NadekoBot.Services.Database.Models;
@@ -33,8 +32,7 @@ namespace NadekoBot
         public DiscordSocketClient Client { get; }
         public CommandService CommandService { get; }
 
-        public DbService Db { get; }
-        public BotConfig BotConfig { get; }
+        private readonly DbService _db;
         public ImmutableArray<GuildConfig> AllGuildConfigs { get; private set; }
 
         /* I don't know how to make this not be static
@@ -54,6 +52,8 @@ namespace NadekoBot
 
         private readonly ShardComClient _comClient;
 
+        private readonly BotConfig _botConfig;
+
         public NadekoBot(int shardId, int parentProcessId, int? port = null)
         {
             if (shardId < 0)
@@ -64,7 +64,7 @@ namespace NadekoBot
             TerribleElevatedPermissionCheck();
 
             Credentials = new BotCredentials();
-            Db = new DbService(Credentials);
+            _db = new DbService(Credentials);
             Client = new DiscordSocketClient(new DiscordSocketConfig
             {
                 MessageCacheSize = 10,
@@ -83,11 +83,11 @@ namespace NadekoBot
             port = port ?? Credentials.ShardRunPort;
             _comClient = new ShardComClient(port.Value);
 
-            using (var uow = Db.UnitOfWork)
+            using (var uow = _db.UnitOfWork)
             {
-                BotConfig = uow.BotConfig.GetOrCreate();
-                OkColor = new Color(Convert.ToUInt32(BotConfig.OkColor, 16));
-                ErrorColor = new Color(Convert.ToUInt32(BotConfig.ErrorColor, 16));
+                _botConfig = uow.BotConfig.GetOrCreate();
+                OkColor = new Color(Convert.ToUInt32(_botConfig.OkColor, 16));
+                ErrorColor = new Color(Convert.ToUInt32(_botConfig.ErrorColor, 16));
             }
 
             SetupShard(parentProcessId, port.Value);
@@ -120,20 +120,22 @@ namespace NadekoBot
             var startingGuildIdList = Client.Guilds.Select(x => (long)x.Id).ToList();
 
             //this unit of work will be used for initialization of all modules too, to prevent multiple queries from running
-            using (var uow = Db.UnitOfWork)
+            using (var uow = _db.UnitOfWork)
             {
                 AllGuildConfigs = uow.GuildConfigs.GetAllGuildConfigs(startingGuildIdList).ToImmutableArray();
 
-                var localization = new Localization(BotConfig.Locale, AllGuildConfigs.ToDictionary(x => x.GuildId, x => x.Locale), Db);
+                IBotConfigProvider botConfigProvider = new BotConfigProvider(_db, _botConfig);
+
+                //var localization = new Localization(_botConfig.Locale, AllGuildConfigs.ToDictionary(x => x.GuildId, x => x.Locale), Db);
 
                 //initialize Services
                 Services = new NServiceProvider.ServiceProviderBuilder()
                     .AddManual<IBotCredentials>(Credentials)
-                    .AddManual(Db)
-                    .AddManual(BotConfig)
+                    .AddManual(_db)
                     .AddManual(Client)
                     .AddManual(CommandService)
-                    .AddManual<ILocalization>(localization)
+                    .AddManual(botConfigProvider)
+                    //.AddManual<ILocalization>(localization)
                     .AddManual<IEnumerable<GuildConfig>>(AllGuildConfigs) //todo wrap this
                     .AddManual<NadekoBot>(this)
                     .AddManual<IUnitOfWork>(uow)

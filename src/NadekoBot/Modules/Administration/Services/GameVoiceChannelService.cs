@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -44,7 +43,7 @@ namespace NadekoBot.Modules.Administration.Services
                     if (gUser == null)
                         return;
 
-                    var game = gUser.Game?.Name.TrimTo(50).ToLowerInvariant();
+                    var game = gUser.Game?.Name?.TrimTo(50).ToLowerInvariant();
 
                     if (oldState.VoiceChannel == newState.VoiceChannel ||
                         newState.VoiceChannel == null)

@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 
 namespace NadekoBot.Services
 {
@@ -17,6 +16,8 @@ namespace NadekoBot.Services
 
         ImmutableArray<byte> WifeMatrix { get; }
         ImmutableArray<byte> RategirlDot { get; }
+
+        ImmutableArray<byte> XpCard { get; }
 
         void Reload();
     }

@@ -10,7 +10,6 @@ using Discord.Net;
 using Discord.WebSocket;
 using NadekoBot.Extensions;
 using NadekoBot.Services;
-using NadekoBot.Services.Database.Models;
 using NadekoBot.Services.Impl;
 using NLog;
 
@@ -22,17 +21,17 @@ namespace NadekoBot.Modules.Games.Common.Trivia
         private readonly Logger _log;
         private readonly NadekoStrings _strings;
         private readonly DiscordSocketClient _client;
-        private readonly BotConfig _bc;
+        private readonly IBotConfigProvider _bc;
         private readonly CurrencyService _cs;
 
         public IGuild Guild { get; }
         public ITextChannel Channel { get; }
 
-        private int questionDurationMiliseconds { get; } = 30000;
-        private int hintTimeoutMiliseconds { get; } = 6000;
+        private readonly int _questionDurationMiliseconds = 30000;
+        private readonly int _hintTimeoutMiliseconds = 6000;
         public bool ShowHints { get; }
         public bool IsPokemon { get; }
-        private CancellationTokenSource triviaCancelSource { get; set; }
+        private CancellationTokenSource _triviaCancelSource;
 
         public TriviaQuestion CurrentQuestion { get; private set; }
         public HashSet<TriviaQuestion> OldQuestions { get; } = new HashSet<TriviaQuestion>();
@@ -44,7 +43,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
 
         public int WinRequirement { get; }
 
-        public TriviaGame(NadekoStrings strings, DiscordSocketClient client, BotConfig bc,
+        public TriviaGame(NadekoStrings strings, DiscordSocketClient client, IBotConfigProvider bc,
             CurrencyService cs, IGuild guild, ITextChannel channel,
             bool showHints, int winReq, bool isPokemon)
         {
@@ -72,7 +71,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
             while (!ShouldStopGame)
             {
                 // reset the cancellation source
-                triviaCancelSource = new CancellationTokenSource();
+                _triviaCancelSource = new CancellationTokenSource();
 
                 // load question
                 CurrentQuestion = TriviaQuestionPool.Instance.GetRandomQuestion(OldQuestions, IsPokemon);
@@ -119,7 +118,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
                     try
                     {
                         //hint
-                        await Task.Delay(hintTimeoutMiliseconds, triviaCancelSource.Token).ConfigureAwait(false);
+                        await Task.Delay(_hintTimeoutMiliseconds, _triviaCancelSource.Token).ConfigureAwait(false);
                         if (ShowHints)
                             try
                             {
@@ -133,7 +132,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
                             catch (Exception ex) { _log.Warn(ex); }
 
                         //timeout
-                        await Task.Delay(questionDurationMiliseconds - hintTimeoutMiliseconds, triviaCancelSource.Token).ConfigureAwait(false);
+                        await Task.Delay(_questionDurationMiliseconds - _hintTimeoutMiliseconds, _triviaCancelSource.Token).ConfigureAwait(false);
 
                     }
                     catch (TaskCanceledException) { } //means someone guessed the answer
@@ -143,7 +142,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
                     GameActive = false;
                     _client.MessageReceived -= PotentialGuess;
                 }
-                if (!triviaCancelSource.IsCancellationRequested)
+                if (!_triviaCancelSource.IsCancellationRequested)
                 {
                     try
                     {
@@ -203,7 +202,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
                     await _guessLock.WaitAsync().ConfigureAwait(false);
                     try
                     {
-                        if (GameActive && CurrentQuestion.IsAnswerCorrect(umsg.Content) && !triviaCancelSource.IsCancellationRequested)
+                        if (GameActive && CurrentQuestion.IsAnswerCorrect(umsg.Content) && !_triviaCancelSource.IsCancellationRequested)
                         {
                             Users.AddOrUpdate(guildUser, 1, (gu, old) => ++old);
                             guess = true;
@@ -211,7 +210,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
                     }
                     finally { _guessLock.Release(); }
                     if (!guess) return;
-                    triviaCancelSource.Cancel();
+                    _triviaCancelSource.Cancel();
 
 
                     if (Users[guildUser] == WinRequirement)
@@ -232,7 +231,7 @@ namespace NadekoBot.Modules.Games.Common.Trivia
                         {
                             // ignored
                         }
-                        var reward = _bc.TriviaCurrencyReward;
+                        var reward = _bc.BotConfig.TriviaCurrencyReward;
                         if (reward > 0)
                             await _cs.AddAsync(guildUser, "Won trivia", reward, true).ConfigureAwait(false);
                         return;

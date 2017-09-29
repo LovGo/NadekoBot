@@ -3,7 +3,6 @@ using Discord.Commands;
 using NadekoBot.Extensions;
 using NadekoBot.Services;
 using System;
-using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading.Tasks;
 using Discord.WebSocket;
@@ -12,7 +11,8 @@ using NadekoBot.Common;
 using NadekoBot.Common.Attributes;
 using NadekoBot.Common.Collections;
 using NLog;
-using NadekoBot.Services.Database.Models;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace NadekoBot.Modules.Gambling
 {
@@ -37,10 +37,10 @@ namespace NadekoBot.Modules.Gambling
 
             private string _secretCode = string.Empty;
             private readonly DiscordSocketClient _client;
-            private readonly BotConfig _bc;
+            private readonly IBotConfigProvider _bc;
             private readonly CurrencyService _cs;
 
-            public CurrencyEventsCommands(DiscordSocketClient client, BotConfig bc, CurrencyService cs)
+            public CurrencyEventsCommands(DiscordSocketClient client, IBotConfigProvider bc, CurrencyService cs)
             {
                 _client = client;
                 _bc = bc;
@@ -80,12 +80,12 @@ namespace NadekoBot.Modules.Gambling
                     _secretCode += _sneakyGameStatusChars[rng.Next(0, _sneakyGameStatusChars.Length)];
                 }
                 
-                await _client.SetGameAsync($"type {_secretCode} for " + _bc.CurrencyPluralName)
+                await _client.SetGameAsync($"type {_secretCode} for " + _bc.BotConfig.CurrencyPluralName)
                     .ConfigureAwait(false);
                 try
                 {
                     var title = GetText("sneakygamestatus_title");
-                    var desc = GetText("sneakygamestatus_desc", Format.Bold(100.ToString()) + _bc.CurrencySign, Format.Bold(num.ToString()));
+                    var desc = GetText("sneakygamestatus_desc", Format.Bold(100.ToString()) + _bc.BotConfig.CurrencySign, Format.Bold(num.ToString()));
                     await context.Channel.SendConfirmAsync(title, desc).ConfigureAwait(false);
                 }
                 catch
@@ -133,20 +133,20 @@ namespace NadekoBot.Modules.Gambling
                     amount = 100;
 
                 var title = GetText("flowerreaction_title");
-                var desc = GetText("flowerreaction_desc", "🌸", Format.Bold(amount.ToString()) + _bc.CurrencySign);
+                var desc = GetText("flowerreaction_desc", "🌸", Format.Bold(amount.ToString()) + _bc.BotConfig.CurrencySign);
                 var footer = GetText("flowerreaction_footer", 24);
                 var msg = await context.Channel.SendConfirmAsync(title,
                         desc, footer: footer)
                     .ConfigureAwait(false);
 
-                await new FlowerReactionEvent(_client, _cs).Start(msg, context, amount);
+                await new FlowerReactionEvent(_client, _cs, amount).Start(msg, context);
             }
         }
     }
 
     public abstract class CurrencyEvent
     {
-        public abstract Task Start(IUserMessage msg, ICommandContext channel, int amount);
+        public abstract Task Start(IUserMessage msg, ICommandContext channel);
     }
 
     public class FlowerReactionEvent : CurrencyEvent
@@ -162,14 +162,39 @@ namespace NadekoBot.Modules.Gambling
         private CancellationTokenSource Source { get; }
         private CancellationToken CancelToken { get; }
 
-        public FlowerReactionEvent(DiscordSocketClient client, CurrencyService cs)
+        private readonly ConcurrentQueue<ulong> _toGiveTo = new ConcurrentQueue<ulong>();
+        private readonly int _amount;
+
+        public FlowerReactionEvent(DiscordSocketClient client, CurrencyService cs, int amount)
         {
             _log = LogManager.GetCurrentClassLogger();
             _client = client;
             _cs = cs;
             _botUser = client.CurrentUser;
+            _amount = amount;
             Source = new CancellationTokenSource();
             CancelToken = Source.Token;
+
+            var _ = Task.Run(async () =>
+            {
+
+                var users = new List<ulong>();
+                while (!CancelToken.IsCancellationRequested)
+                {
+                    await Task.Delay(1000).ConfigureAwait(false);
+                    while (_toGiveTo.TryDequeue(out var usrId))
+                    {
+                        users.Add(usrId);
+                    }
+
+                    if (users.Count > 0)
+                    {
+                        await _cs.AddToManyAsync("", _amount, users.ToArray()).ConfigureAwait(false);
+                    }
+
+                    users.Clear();
+                }
+            }, CancelToken);
         }
 
         private async Task End()
@@ -193,7 +218,7 @@ namespace NadekoBot.Modules.Gambling
             return Task.CompletedTask;
         }
 
-        public override async Task Start(IUserMessage umsg, ICommandContext context, int amount)
+        public override async Task Start(IUserMessage umsg, ICommandContext context)
         {
             StartingMessage = umsg;
             _client.MessageDeleted += MessageDeletedEventHandler;
@@ -208,7 +233,7 @@ namespace NadekoBot.Modules.Gambling
                     catch { return; }
                 }
             }
-            using (StartingMessage.OnReaction(_client, async (r) =>
+            using (StartingMessage.OnReaction(_client, (r) =>
             {
                 try
                 {
@@ -217,8 +242,7 @@ namespace NadekoBot.Modules.Gambling
 
                     if (r.Emote.Name == "🌸" && r.User.IsSpecified && ((DateTime.UtcNow - r.User.Value.CreatedAt).TotalDays > 5) && _flowerReactionAwardedUsers.Add(r.User.Value.Id))
                     {
-                        await _cs.AddAsync(r.User.Value, "Flower Reaction Event", amount, false)
-                            .ConfigureAwait(false);
+                        _toGiveTo.Enqueue(r.UserId);
                     }
                 }
                 catch

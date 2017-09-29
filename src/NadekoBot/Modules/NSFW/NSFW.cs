@@ -4,8 +4,6 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
-using NadekoBot.Services;
-using System.Net.Http;
 using NadekoBot.Extensions;
 using System.Threading;
 using System.Collections.Concurrent;
@@ -14,6 +12,7 @@ using NadekoBot.Common.Attributes;
 using NadekoBot.Common.Collections;
 using NadekoBot.Modules.Searches.Common;
 using NadekoBot.Modules.Searches.Services;
+using NadekoBot.Modules.NSFW.Exceptions;
 
 namespace NadekoBot.Modules.NSFW
 {
@@ -27,7 +26,16 @@ namespace NadekoBot.Modules.NSFW
             var rng = new NadekoRandom();
             var arr = Enum.GetValues(typeof(DapiSearchType));
             var type = (DapiSearchType)arr.GetValue(new NadekoRandom().Next(2, arr.Length));
-            var img = await _service.DapiSearch(tag, type, Context.Guild?.Id, true).ConfigureAwait(false);
+            ImageCacherObject img;
+            try
+            {
+                img = await _service.DapiSearch(tag, type, Context.Guild?.Id, true).ConfigureAwait(false);
+            }
+            catch (TagBlacklistedException)
+            {
+                await ReplyErrorLocalized("blacklisted_tag").ConfigureAwait(false);
+                return;
+            }
 
             if (img == null)
             {
@@ -150,10 +158,7 @@ namespace NadekoBot.Modules.NSFW
             try
             {
                 JToken obj;
-                using (var http = new HttpClient())
-                {
-                    obj = JArray.Parse(await http.GetStringAsync($"http://api.oboobs.ru/boobs/{new NadekoRandom().Next(0, 10330)}").ConfigureAwait(false))[0];
-                }
+                obj = JArray.Parse(await _service.Http.GetStringAsync($"http://api.oboobs.ru/boobs/{new NadekoRandom().Next(0, 10330)}").ConfigureAwait(false))[0];
                 await Context.Channel.SendMessageAsync($"http://media.oboobs.ru/{obj["preview"]}").ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -168,10 +173,7 @@ namespace NadekoBot.Modules.NSFW
             try
             {
                 JToken obj;
-                using (var http = new HttpClient())
-                {
-                    obj = JArray.Parse(await http.GetStringAsync($"http://api.obutts.ru/butts/{new NadekoRandom().Next(0, 4335)}").ConfigureAwait(false))[0];
-                }
+                obj = JArray.Parse(await _service.Http.GetStringAsync($"http://api.obutts.ru/butts/{new NadekoRandom().Next(0, 4335)}").ConfigureAwait(false))[0];
                 await Context.Channel.SendMessageAsync($"http://media.obutts.ru/{obj["preview"]}").ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -180,9 +182,51 @@ namespace NadekoBot.Modules.NSFW
             }
         }
 
+        [NadekoCommand, Usage, Description, Aliases]
+        [RequireContext(ContextType.Guild)]
+        public async Task NsfwTagBlacklist([Remainder] string tag = null)
+        {
+            if (string.IsNullOrWhiteSpace(tag))
+            {
+                var blTags = _service.GetBlacklistedTags(Context.Guild.Id);
+                await Context.Channel.SendConfirmAsync(GetText("blacklisted_tag_list"),
+                    blTags.Any()
+                    ? string.Join(", ", blTags)
+                    : "-").ConfigureAwait(false);
+            }
+            else
+            {
+                tag = tag.Trim().ToLowerInvariant();
+                var added = _service.ToggleBlacklistedTag(Context.Guild.Id, tag);
+
+                if(added)
+                    await ReplyConfirmLocalized("blacklisted_tag_add", tag).ConfigureAwait(false);
+                else
+                    await ReplyConfirmLocalized("blacklisted_tag_remove", tag).ConfigureAwait(false);
+            }
+        }
+
+        [NadekoCommand, Usage, Description, Aliases]
+        [RequireContext(ContextType.Guild)]
+        [OwnerOnly]
+        public Task NsfwClearCache()
+        {
+            _service.ClearCache();
+            return Context.Channel.SendConfirmAsync("👌");
+        }
+
         public async Task InternalDapiCommand(string tag, DapiSearchType type, bool forceExplicit)
         {
-            var imgObj = await _service.DapiSearch(tag, type, Context.Guild?.Id, forceExplicit).ConfigureAwait(false);
+            ImageCacherObject imgObj;
+            try
+            {
+                imgObj = await _service.DapiSearch(tag, type, Context.Guild?.Id, forceExplicit).ConfigureAwait(false);
+            }
+            catch (TagBlacklistedException)
+            {
+                await ReplyErrorLocalized("blacklisted_tag").ConfigureAwait(false);
+                return;
+            }
 
             if (imgObj == null)
                 await ReplyErrorLocalized("not_found").ConfigureAwait(false);

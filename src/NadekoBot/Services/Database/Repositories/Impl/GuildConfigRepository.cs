@@ -46,6 +46,9 @@ namespace NadekoBot.Services.Database.Repositories.Impl
                     .ThenInclude(x => x.IgnoredChannels)
                 .Include(gc => gc.FollowedStreams)
                 .Include(gc => gc.StreamRole)
+                .Include(gc => gc.NsfwBlacklistedTags)
+                .Include(gc => gc.XpSettings)
+                    .ThenInclude(x => x.ExclusionList)
                 .ToList();
 
         /// <summary>
@@ -187,6 +190,20 @@ namespace NadekoBot.Services.Database.Repositories.Impl
                 return;
 
             conf.CleverbotEnabled = cleverbotEnabled;
+        }
+
+        public XpSettings XpSettingsFor(ulong guildId)
+        {
+            var gc = For(guildId,
+                set => set.Include(x => x.XpSettings)
+                          .ThenInclude(x => x.RoleRewards)
+                          .Include(x => x.XpSettings)
+                          .ThenInclude(x => x.ExclusionList));
+
+            if (gc.XpSettings == null)
+                gc.XpSettings = new XpSettings();
+
+            return gc.XpSettings;
         }
     }
 }

@@ -10,11 +10,18 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using NadekoBot.Modules.Searches.Common;
+using NadekoBot.Services.Database.Models;
+using System.Linq;
+using Microsoft.EntityFrameworkCore;
+using NadekoBot.Modules.NSFW.Exceptions;
+using System.Net.Http;
 
 namespace NadekoBot.Modules.Searches.Services
 {
     public class SearchesService : INService
     {
+        public HttpClient Http { get; }
+
         private readonly DiscordSocketClient _client;
         private readonly IGoogleApiService _google;
         private readonly DbService _db;
@@ -31,14 +38,23 @@ namespace NadekoBot.Modules.Searches.Services
         public List<WoWJoke> WowJokes { get; } = new List<WoWJoke>();
         public List<MagicItem> MagicItems { get; } = new List<MagicItem>();
 
-        private readonly ConcurrentDictionary<ulong?, SearchImageCacher> _imageCacher = new ConcurrentDictionary<ulong?, SearchImageCacher>();
+        private readonly ConcurrentDictionary<ulong, SearchImageCacher> _imageCacher = new ConcurrentDictionary<ulong, SearchImageCacher>();
 
-        public SearchesService(DiscordSocketClient client, IGoogleApiService google, DbService db)
+        private readonly ConcurrentDictionary<ulong, HashSet<string>> _blacklistedTags = new ConcurrentDictionary<ulong, HashSet<string>>();
+
+        public SearchesService(DiscordSocketClient client, IGoogleApiService google, DbService db, IEnumerable<GuildConfig> gcs)
         {
+            Http = new HttpClient();
+            Http.AddFakeHeaders();
             _client = client;
             _google = google;
             _db = db;
             _log = LogManager.GetCurrentClassLogger();
+
+            _blacklistedTags = new ConcurrentDictionary<ulong, HashSet<string>>(
+                gcs.ToDictionary(
+                    x => x.GuildId,
+                    x => new HashSet<string>(x.NsfwBlacklistedTags.Select(y => y.Tag))));
 
             //translate commands
             _client.MessageReceived += (msg) =>
@@ -117,9 +133,67 @@ namespace NadekoBot.Modules.Searches.Services
 
         public Task<ImageCacherObject> DapiSearch(string tag, DapiSearchType type, ulong? guild, bool isExplicit = false)
         {
-            var cacher = _imageCacher.GetOrAdd(guild, (key) => new SearchImageCacher());
-            
-            return cacher.GetImage(tag, isExplicit, type);
+            if (guild.HasValue)
+            {
+                var blacklistedTags = GetBlacklistedTags(guild.Value);
+
+                if (blacklistedTags
+                    .Any(x => tag.ToLowerInvariant().Contains(x)))
+                {
+                    throw new TagBlacklistedException();
+                }
+
+                var cacher = _imageCacher.GetOrAdd(guild.Value, (key) => new SearchImageCacher());
+
+                return cacher.GetImage(tag, isExplicit, type, blacklistedTags);
+            }
+            else
+            {
+                var cacher = _imageCacher.GetOrAdd(guild ?? 0, (key) => new SearchImageCacher());
+
+                return cacher.GetImage(tag, isExplicit, type);
+            }
+        }
+
+        public HashSet<string> GetBlacklistedTags(ulong guildId)
+        {
+            if (_blacklistedTags.TryGetValue(guildId, out var tags))
+                return tags;
+            return new HashSet<string>();
+        }
+
+        public bool ToggleBlacklistedTag(ulong guildId, string tag)
+        {
+            var tagObj = new NsfwBlacklitedTag
+            {
+                Tag = tag
+            };
+
+            bool added;
+            using (var uow = _db.UnitOfWork)
+            {
+                var gc = uow.GuildConfigs.For(guildId, set => set.Include(y => y.NsfwBlacklistedTags));
+                if (gc.NsfwBlacklistedTags.Add(tagObj))
+                    added = true;
+                else
+                {
+                    gc.NsfwBlacklistedTags.Remove(tagObj);
+                    added = false;
+                }
+                var newTags = new HashSet<string>(gc.NsfwBlacklistedTags.Select(x => x.Tag));
+                _blacklistedTags.AddOrUpdate(guildId, newTags, delegate { return newTags; });
+
+                uow.Complete();
+            }
+            return added;
+        }
+
+        public void ClearCache()
+        {
+            foreach (var c in _imageCacher)
+            {
+                c.Value?.Clear();
+            }
         }
     }
     
